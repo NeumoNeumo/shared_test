@@ -1,0 +1,6 @@
+.vscode
+*.cpp
+*.c++
+*.cxx
+*.c
+*.java
