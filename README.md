@@ -27,6 +27,27 @@ Illustration:
 - `test` stores testcase files and testcase generators. See more in `python
   test.py --help`
 
+## Example
+Compile this simple program to get an executable `add` in this directory.
+```c
+#include<stdio.h>
+
+int main() {
+  int a, b;
+  scanf("%d %d", &a, &b);
+  printf("%d", a + b);
+  return 0
+}
+```
+`lab00` is for usage of helping developemnt and problem `a` requires an
+algorithm to add two numbers. Try out using
+```
+python test.py -R5 a
+```
+to run the default testset in `lab00/test/a` and 5 random test cases.
+
+For detailed explanation, see `python test.py --help`
+
 ## More
 
 Any attempt to ease coding burden and to accelerate the workflow is welcomed!
