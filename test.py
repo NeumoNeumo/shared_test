@@ -14,12 +14,11 @@ two-digit numbers and <problemID> is a lowercase letter.
 
 To change the default setting, the following options can be used.
 
-   *`-r` tests your program with random cases if `random_test.py` or
-    `random_test.out` is provided in `<labID>/test/<problemID>/<testcaseID>/`.
-    When both of these two files exist, `random_test.out` is prefered in
-    consideration of efficiency. If using python module, there must be a class
-    `RandomTestSet` in module `random_test.py` inheriting from `TestSet` in this
-    file.
+   *`-r NUM` tests your program with NUM random cases if `spec.py` or `spec.out`
+    is provided in `<labID>/test/<problemID>/<testcaseID>/`. When both of these
+    two files exist, `spec.out` is prefered in consideration of efficiency. If
+    using python module, there must be a class `RandomTestSet` in module
+    `spec.py` inheriting from `TestSet` in this file.
 
    *`-R` behaves the same as `-r` except for using default testcases as well.
 
@@ -70,9 +69,23 @@ class DefaultTestSet(TestSet):
     def __init__(self, labID, problemID):
         super().__init__("Default", labID, problemID)
         self.data_dir = Path(__file__).parent / labID / "test" / problemID
+        self.glob_list = list(self.data_dir.glob("*.in"))
+        self.length = len(self.glob_list)
+        self.pointer = 0
 
     def __next__(self):
-        pass
+        if self.pointer == self.length:
+            raise StopIteration
+        p = self.pointer
+        self.pointer += 1
+        tc_ip = self.glob_list[p]
+        tc_name = tc_ip.stem
+        tc_input = tc_ip.read_text()
+        tc_output = (tc_ip.parent / (tc_name + ".out")).read_text()
+        return (tc_name, tc_input, tc_output)
+
+    def __len__(self):
+        return self.length
 
 
 class Status(Enum):
@@ -101,35 +114,47 @@ class DefaultTheme:
         def testcase_in(self, casename, match=False):
             print(f"Testing [{casename}]... ", end="")
 
-        def testcase_aft(self, casename, status, time, stderr=None, match=False):
-            if status == Status.SUCCESS:
-                print(f"Passed in {time}s")
+        def testcase_aft(
+            self,
+            casename,
+            status,
+            time,
+            stderr=None,
+            match=False,
+            result=None,
+            expected=None,
+        ):
+            if status == Status.SUCCESS.value:
+                print(f"Passed in {time*1000:.2f}ms")
+            elif status == Status.WRONG_ANSWER.value:
+                print(f"current: {result}")
+                print(f"expected: {expected}")
             elif stderr:
                 print("Runtime Error")
                 print(stderr)
             else:
-                print("Failed")
+                print(Status(status).name)
 
         def testset_aft(self, testset_name, status_dict, match=False):
             success_num = 0
             tot_num = 0
             for status in status_dict:
-                if status == Status.SUCCESS:
+                if status == Status.SUCCESS.value:
                     success_num += len(status_dict[status])
                 tot_num += len(status_dict[status])
 
             print(
-                f"Pass {success_num*100.0/tot_num:.2f}% ({success_num}/tot_num) in testset [{testset_name}]"
+                f"Pass {success_num*100.0/tot_num:.2f}% ({success_num}/{tot_num}) in testset [{testset_name}]"
             )
 
         def test_aft(self, testset_names, status_dict, match=False):
             success_num = 0
             tot_num = 0
             for status in status_dict:
-                if status == Status.SUCCESS:
+                if status == Status.SUCCESS.value:
                     success_num += len(status_dict[status])
                 tot_num += len(status_dict[status])
-            txt = f"Totally passed {success_num*100.0/tot_num:.2f}% ({success_num}/tot_num) in "
+            txt = f"Totally passed {success_num*100.0/tot_num:.2f}% ({success_num}/{tot_num}) in "
             first = True
             for tn in testset_names:
                 if first:
@@ -191,8 +216,10 @@ class Test:
             testset_opt = ["default"]
         elif args.Random:
             testset_opt = ["default", "random"]
+            case_num = args.Random
         elif args.random:
             testset_opt = ["random"]
+            case_num = args.random
 
         test_basedir = Path(__file__).parent / labID / "test" / problemID
         test_conf_p = test_basedir / "test.conf"
@@ -201,7 +228,7 @@ class Test:
             if notify.yes_or_no(
                 f"Create test config for problem {problemID} in {labID}? (Y/n)"
             ):
-                timeout = input("Time Limit in seconds (float)")
+                timeout = input("Time Limit in seconds (float): ")
                 with open(test_conf_p, "w") as f:
                     json.dump({"timeout": int(timeout)}, f)
             else:
@@ -223,16 +250,16 @@ class Test:
 
             sys.path.insert(1, str(test_basedir))
             try:
-                from random_test import RandomTestSet  # type: ignore
+                from spec import RandomTestSet  # type: ignore
             except Exception:
                 notify.error(f"random_test.* not found under {str(test_basedir)}")
                 return
-            testsets.append(RandomTestSet(labID, problemID))
+            testsets.append(RandomTestSet(labID, problemID, case_num))  # type: ignore
         exec_p = Path(args.EXEC)
         info.test_bef(args, testsets)
         if not args.match:
             acc_testset_names = list()
-            acc_status_dict = list()
+            acc_status_dict = defaultdict(list)
             for testset in testsets:
                 info.testset_bef(testset.name)
                 status_dict = defaultdict(list)
@@ -241,29 +268,40 @@ class Test:
                     info.testcase_in(casename)
                     duration = 0.0
                     start_time = time.time()
-                    status = Status.SUCCESS
+                    status = Status.SUCCESS.value
                     try:
                         complete_ps = subprocess.run(
                             f"{exec_p.absolute()}",
                             text=True,
                             capture_output=True,
                             timeout=timeout,
+                            input=unit_case,
                         )
                         duration = time.time() - start_time
+                        testcase_infoed = False
                         if isinstance(verifier, str):
-                            if complete_ps.stdout != verifier:
-                                status = Status.WRONG_ANSWER
+                            if complete_ps.stdout.strip() != verifier.strip():
+                                status = Status.WRONG_ANSWER.value
+                                testcase_infoed = True
+                                info.testcase_aft(
+                                    casename,
+                                    status,
+                                    duration,
+                                    result=complete_ps.stdout,
+                                    expected=verifier,
+                                )
                         else:
                             if not verifier(complete_ps.stdout):
-                                status = Status.WRONG_ANSWER
-                        info.testcase_aft(casename, status, duration)
+                                status = Status.WRONG_ANSWER.value
+                        if not testcase_infoed:
+                            info.testcase_aft(casename, status, duration)
                     except subprocess.TimeoutExpired:
                         duration = timeout
-                        status = Status.TIME_LIMIT_EXCESS
+                        status = Status.TIME_LIMIT_EXCESS.value
                         info.testcase_aft(casename, status, duration)
                     except subprocess.CalledProcessError:
                         duration = time.time() - start_time
-                        status = Status.RUNTIME_ERROR
+                        status = Status.RUNTIME_ERROR.value
                         info.testcase_aft(
                             casename,
                             status,
@@ -274,7 +312,7 @@ class Test:
                 utility.unionDict(acc_status_dict, status_dict)
                 acc_testset_names.append(testset.name)
                 info.testset_aft(testset.name, status_dict)
-            info.test_aft(acc_testset_names, acc_testset_names)
+            info.test_aft(acc_testset_names, acc_status_dict)
         else:
             pass
 
@@ -282,8 +320,9 @@ class Test:
 class utility:
     @staticmethod
     def unionDict(a, b):
-        for k, v in b:
-            a[k].append(v)
+        # a is a defaultdict(list)
+        for k in b:
+            a[k] += b[k]
 
 
 def main(args):
@@ -292,16 +331,14 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        usage="test [-h] [-rRl] [-m SID] EXEC",
+        usage="test [-h] [-rR NUM] [-l] [-m SID] EXEC",
         prog="test",
         description="A simple tool for test cpp codes.",
         epilog=epilog,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("-r", "--random", action="store_true", help="random test")
-    parser.add_argument(
-        "-R", "--Random", action="store_true", help="random test and default test"
-    )
+    parser.add_argument("-r", "--random", type=int, help="test NUM random cases")
+    parser.add_argument("-R", "--Random", type=int, help="random test and default test")
     parser.add_argument(
         "-m", "--match", metavar="SID", help="matching test with another"
     )
