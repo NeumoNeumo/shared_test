@@ -1,4 +1,5 @@
 import time
+from collections import defaultdict
 from pathlib import Path
 import sys
 import json
@@ -73,39 +74,55 @@ class DefaultTestSet(TestSet):
     def __next__(self):
         pass
 
+
 class Status(Enum):
     SUCCESS = 0
     WRONG_ANSWER = 1
     TIME_LIMIT_EXCESS = 2
     RUNTIME_ERROR = 3
 
-class DefaultTheme():
+
+class DefaultTheme:
     def __init__(self):
         self.testInfo = self._TestInfo()
         self.notify = self._Notify()
-    class _TestInfo():
+
+    class _TestInfo:
         # Animation, decoration and print info when testing EXEC:
-        def testset_bef(self, testset_name):
+        def test_bef(self, args, testsets, match=False):
+            print("Start to test")
+
+        def testset_bef(self, testset_name, match=False):
             print(f"Testset [{testset_name}] started")
-        def testcase_bef(self, casename):
+
+        def testcase_bef(self, casename, match=False):
             pass
-        def testcase_in(self, casename):
-            print(f"Testing [{casename}] ", end="")
-        def testcase_aft(self, casename, status):
+
+        def testcase_in(self, casename, match=False):
+            print(f"Testing [{casename}]... ", end="")
+
+        def testcase_aft(self, casename, status, time, stderr=None, match=False):
             if status == Status.SUCCESS:
-                print("Passed")
+                print(f"Passed in {time}s")
+            elif stderr:
+                print("Runtime Error")
+                print(stderr)
             else:
                 print("Failed")
-        def testset_aft(self, testset_name, status_dict):
+
+        def testset_aft(self, testset_name, status_dict, match=False):
             success_num = 0
             tot_num = 0
             for status in status_dict:
                 if status == Status.SUCCESS:
                     success_num += len(status_dict[status])
                 tot_num += len(status_dict[status])
-            
-            print(f"Pass {success_num*100.0/tot_num:.2f}% ({success_num}/tot_num) in testset [{testset_name}]")
-        def test_aft(self, testset_names ,status_dict):
+
+            print(
+                f"Pass {success_num*100.0/tot_num:.2f}% ({success_num}/tot_num) in testset [{testset_name}]"
+            )
+
+        def test_aft(self, testset_names, status_dict, match=False):
             success_num = 0
             tot_num = 0
             for status in status_dict:
@@ -121,10 +138,11 @@ class DefaultTheme():
                     txt += f", [{tn}]"
             print(txt)
 
-    class _Notify():
+    class _Notify:
         _RST = "\033[0m"
         _RED = "\033[1;31m"
         _YEL = "\033[1;33m"
+
         # Notification:
         def warn(self, txt):
             print(self._YEL + "Warn: " + self._RST + txt)
@@ -143,20 +161,23 @@ class DefaultTheme():
                 sys.exit(1)
 
 
-class Test():
+class Test:
     def __init__(self, args, theme=DefaultTheme):
         self.args = args
         self.theme = theme()
+
     def begin(self):
         notify = self.theme.notify
+        info = self.theme.testInfo
         args = self.args
         conf_p = Path("test.conf")
         if not conf_p.is_file():
-            print("lala")
             notify.warn("Config file not found.")
             if notify.yes_or_no("Confirm to init config? (Y/n)"):
                 labID = input("Please input your labID (lab**): ")
-                problemID = input("Please input your problemID (lowercase single letter): ")
+                problemID = input(
+                    "Please input your problemID (lowercase single letter): "
+                )
                 with open(conf_p, "w") as f:
                     json.dump({"labID": labID, "problemID": problemID}, f)
             else:
@@ -173,14 +194,16 @@ class Test():
         elif args.random:
             testset_opt = ["random"]
 
-        test_basedir = Path(__file__).parent/labID/"test"/problemID
-        test_conf_p = test_basedir/"test.conf"
+        test_basedir = Path(__file__).parent / labID / "test" / problemID
+        test_conf_p = test_basedir / "test.conf"
         if not test_conf_p.is_file():
             notify.warn("test.conf not found.")
-            if notify.yes_or_no(f"Create test config for problem {problemID} in {labID}? (Y/n)"):
+            if notify.yes_or_no(
+                f"Create test config for problem {problemID} in {labID}? (Y/n)"
+            ):
                 timeout = input("Time Limit in seconds (float)")
                 with open(test_conf_p, "w") as f:
-                    json.dump({"timeout": timeout}, f)
+                    json.dump({"timeout": int(timeout)}, f)
             else:
                 return
         with open(test_conf_p, "r") as f:
@@ -188,39 +211,84 @@ class Test():
         timeout = test_conf["timeout"]
 
         if not test_basedir.is_dir():
-            notify.error(f"{str(test_basedir)} not a directory. It is possible that nobody has written a testcase yet ")
+            notify.error(
+                f"{str(test_basedir)} not a directory. It is possible that nobody has written a testcase yet "
+            )
             return
         testsets = list()
         if "default" in testset_opt:
             testsets.append(DefaultTestSet(labID, problemID))
         if "random" in testset_opt:
             import sys
+
             sys.path.insert(1, str(test_basedir))
             try:
-                from random_test import RandomTestSet # type: ignore
+                from random_test import RandomTestSet  # type: ignore
             except Exception:
                 notify.error(f"random_test.* not found under {str(test_basedir)}")
                 return
             testsets.append(RandomTestSet(labID, problemID))
         exec_p = Path(args.EXEC)
+        info.test_bef(args, testsets)
         if not args.match:
+            acc_testset_names = list()
+            acc_status_dict = list()
             for testset in testsets:
-                print(f"Testing in testset {testset.name}")
+                info.testset_bef(testset.name)
+                status_dict = defaultdict(list)
                 for casename, unit_case, verifier in testset:
+                    info.testcase_bef(casename)
+                    info.testcase_in(casename)
+                    duration = 0.0
+                    start_time = time.time()
+                    status = Status.SUCCESS
                     try:
-                        start_time = time.time()
-                        complete_ps = subprocess.run(f"{exec_p.absolute()}", text=True,
-                                   capture_output=True, timeout=timeout)
-                        finish_time = time.time()
+                        complete_ps = subprocess.run(
+                            f"{exec_p.absolute()}",
+                            text=True,
+                            capture_output=True,
+                            timeout=timeout,
+                        )
+                        duration = time.time() - start_time
+                        if isinstance(verifier, str):
+                            if complete_ps.stdout != verifier:
+                                status = Status.WRONG_ANSWER
+                        else:
+                            if not verifier(complete_ps.stdout):
+                                status = Status.WRONG_ANSWER
+                        info.testcase_aft(casename, status, duration)
                     except subprocess.TimeoutExpired:
-                        pass
+                        duration = timeout
+                        status = Status.TIME_LIMIT_EXCESS
+                        info.testcase_aft(casename, status, duration)
                     except subprocess.CalledProcessError:
-                        pass
+                        duration = time.time() - start_time
+                        status = Status.RUNTIME_ERROR
+                        info.testcase_aft(
+                            casename,
+                            status,
+                            duration,
+                            stderr=complete_ps.stderr,  # type: ignore
+                        )
+                    status_dict[status].append(casename)
+                utility.unionDict(acc_status_dict, status_dict)
+                acc_testset_names.append(testset.name)
+                info.testset_aft(testset.name, status_dict)
+            info.test_aft(acc_testset_names, acc_testset_names)
         else:
             pass
 
+
+class utility:
+    @staticmethod
+    def unionDict(a, b):
+        for k, v in b:
+            a[k].append(v)
+
+
 def main(args):
     Test(args).begin()
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -234,7 +302,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "-R", "--Random", action="store_true", help="random test and default test"
     )
-    parser.add_argument("-m", "--match", metavar="SID", help="matching test with another")
+    parser.add_argument(
+        "-m", "--match", metavar="SID", help="matching test with another"
+    )
     parser.add_argument(
         "-l", "--list-available", action="store_true", help="list available executables"
     )
