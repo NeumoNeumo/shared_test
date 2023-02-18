@@ -1,10 +1,8 @@
 from test import RandomTestSetBase
 import random
 
-class CONFIG:
-    @staticmethod
-    def get_config():
-        return {"timeout": 1}
+def get_config():
+    return {"timeout": 1}
 
 class RandomTestSet(RandomTestSetBase):
     def __init__(self, labID, problemID, case_num):

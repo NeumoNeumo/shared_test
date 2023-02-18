@@ -1,8 +1,8 @@
 import time
+import importlib
 from collections import defaultdict
 from pathlib import Path
 import sys
-import json
 import argparse
 import subprocess
 from enum import Enum
@@ -13,18 +13,14 @@ the testcase in `<LABID>/test/<PROBID>/<testcaseID>`.
 In the `test` directory of every problem, a file `spec.*` is required to specify
 basic settings and optional problem-specific random testcase generator for the
 problem where `*` means `.py` or `.out`. When both `.py` and `.out` exist,
-`.out` is prefered in consideration of efficiency.
+`.out` is prefered in consideration of efficiency. (However, the support for
+`spec.out` has not been implemented yet. TODO: support for `spec.out`)
 
-The scopes of `spec.py` is as follows:
-``` python
-### MANDATORY
-_TIMEOUT=1 # Time limit of the problem in unit of sec
-
-### OPTIONAL
-class RandomTestSet(RandomTestSetBase): 
-    def generate(self):
-        pass
-```
+In `spec.py`, a function `get_config` that returns a config object is required.
+The config object must contain a key "timeout" which indicates the time limit
+in the unit of seconds, the value being a number. Additionally, if randomly
+generated testcases are wanted, `spec.py` ought to have a class `RandomTestSet`
+inheriting from class `RandomTestSetBase` in the `test.py`
 
 To change the default setting, the following options can be used.
 
@@ -41,9 +37,6 @@ To change the default setting, the following options can be used.
     ambiguity (usually last 4 is enough), is acceptable.
 
    *`-l` helps to list all the available executables you can match with.
-
-Configuration file describes which problem you are dealing with. It is in the
-format of json, containing labID and problemID.
 """
 
 
@@ -101,23 +94,28 @@ class DefaultTestSet(TestSet):
     def __len__(self):
         return self.length
 
+
 class RandomTestSetBase(TestSet):
     """Every RandomTestSet should inherit from this class"""
+
     def __init__(self, labID, problemID, case_num, testset_name="Random"):
         super().__init__(testset_name, labID, problemID)
         self.case_num = case_num
         self.cnt = 0
         self.num = case_num
-    
+
     def __len__(self):
         return self.num
+
     def __next__(self):
         if self.cnt == self.num:
             raise StopIteration
         self.cnt += 1
         return self.generate()
+
     def generate(self):
         raise NotImplementedError
+
 
 class Status(Enum):
     SUCCESS = 0
@@ -190,6 +188,7 @@ class DefaultTheme:
             for tn in testset_names:
                 if first:
                     txt += f"[{tn}]"
+                    first = False
                 else:
                     txt += f", [{tn}]"
             print(txt)
@@ -221,16 +220,37 @@ class Test:
     def __init__(self, args, theme=DefaultTheme):
         self.args = args
         self.theme = theme()
+        self.labID = args.LABID
+        self.problemID = args.PROBID
 
-    def perform(self):
+    def import_spec(self, args):
         notify = self.theme.notify
-        info = self.theme.testInfo
-        args = self.args
+        test_basedir = Path(__file__).parent / self.labID / "test" / self.problemID
+        if not test_basedir.is_dir():
+            notify.error(
+                f"{str(test_basedir)} not a directory. It is possible that nobody has written a testcase yet "
+            )
+            sys.exit(1)
+        spec_p = test_basedir / "spec.py"
+        if not spec_p.is_file():
+            notify.warn("spec.py not found.")
+            if notify.yes_or_no(
+                f"Create test config for problem {self.problemID} in {self.labID}? (Y/n)"
+            ):
+                timeout = input("Time Limit in seconds (float): ")
+                spec_p.write_text('def get_config():\n    return {"timeout": 1}')
+            else:
+                sys.exit(1)
+        sys.path.insert(1, str(test_basedir))
+        try:
+            return importlib.import_module("spec")
+        except Exception:
+            notify.error(f"spec.* not found under {str(test_basedir)}")
+            sys.exit(1)
 
-        labID = args.LABID
-        problemID = args.PROBID
-
+    def get_testsets(self, args, spec):
         testset_opt = list()
+        case_num = 5
         if not args.random and not args.Random:
             testset_opt = ["default"]
         elif args.Random:
@@ -239,102 +259,101 @@ class Test:
         elif args.random:
             testset_opt = ["random"]
             case_num = args.random
-
-        test_basedir = Path(__file__).parent / labID / "test" / problemID
-        if not test_basedir.is_dir():
-            notify.error(
-                f"{str(test_basedir)} not a directory. It is possible that nobody has written a testcase yet "
-            )
-            return
-        spec_p = test_basedir / "spec.py"
-        if not spec_p.is_file():
-            notify.warn("spec.py not found.")
-            if notify.yes_or_no(
-                f"Create test config for problem {problemID} in {labID}? (Y/n)"
-            ):
-                timeout = input("Time Limit in seconds (float): ")
-                spec_p.write_text(f"_TIMEOUT = {timeout}")
-            else:
-                return
-        sys.path.insert(1, str(test_basedir))
-        try:
-            import spec # type: ignore
-        except Exception:
-            notify.error(f"spec.* not found under {str(test_basedir)}")
-            return
-        config = spec.CONFIG.get_config()
-        timeout = config["timeout"]
-
         testsets = list()
         if "default" in testset_opt:
-            testsets.append(DefaultTestSet(labID, problemID))
+            testsets.append(DefaultTestSet(self.labID, self.problemID))
         if "random" in testset_opt:
-            testsets.append(spec.RandomTestSet(labID, problemID, case_num))  # type: ignore
-        
-        exec_p = Path(args.EXEC)
+            testsets.append(spec.RandomTestSet(self.labID, self.problemID, case_num))
+        return testsets
+
+    def get_exec_path(self, args):
+        notify = self.theme.notify
+        exec_p = Path(self.args.EXEC)
         if not exec_p.is_file():
             notify.error(f"{exec_p.absolute()} is not a valid path to an executable")
-            return
+            sys.exit(1)
+        return exec_p
 
-        info.test_bef(args, testsets)
-        if not args.match:
-            acc_testset_names = list()
-            acc_status_dict = defaultdict(list)
-            for testset in testsets:
-                info.testset_bef(testset.name)
-                status_dict = defaultdict(list)
-                for casename, unit_case, verifier in testset:
-                    info.testcase_bef(casename)
-                    info.testcase_in(casename)
-                    duration = 0.0
-                    start_time = time.time()
-                    status = Status.SUCCESS.value
-                    try:
-                        complete_ps = subprocess.run(
-                            f"{exec_p.absolute()}",
-                            text=True,
-                            capture_output=True,
-                            timeout=timeout,
-                            input=unit_case,
-                        )
-                        duration = time.time() - start_time
-                        testcase_infoed = False
-                        if isinstance(verifier, str):
-                            if complete_ps.stdout.strip() != verifier.strip():
-                                status = Status.WRONG_ANSWER.value
-                                testcase_infoed = True
-                                info.testcase_aft(
-                                    casename,
-                                    status,
-                                    duration,
-                                    result=complete_ps.stdout,
-                                    expected=verifier,
-                                )
-                        else:
-                            if not verifier(complete_ps.stdout):
-                                status = Status.WRONG_ANSWER.value
-                        if not testcase_infoed:
-                            info.testcase_aft(casename, status, duration)
-                    except subprocess.TimeoutExpired:
-                        duration = timeout
-                        status = Status.TIME_LIMIT_EXCESS.value
+    def match_test(self, args, testsets, config, exec_p):
+        pass
+
+    def unit_test(self, args, testsets, config, exec_p):
+        info = self.theme.testInfo
+        timeout = config["timeout"]
+        acc_testset_names = list()
+        acc_status_dict = defaultdict(list)
+        for testset in testsets:
+            info.testset_bef(testset.name)
+            status_dict = defaultdict(list)
+            for casename, unit_case, verifier in testset:
+                info.testcase_bef(casename)
+                info.testcase_in(casename)
+                duration = 0.0
+                start_time = time.time()
+                status = Status.SUCCESS.value
+                try:
+                    complete_ps = subprocess.run(
+                        f"{exec_p.absolute()}",
+                        text=True,
+                        capture_output=True,
+                        timeout=timeout,
+                        input=unit_case,
+                    )
+                    duration = time.time() - start_time
+                    testcase_infoed = False
+                    if isinstance(verifier, str):
+                        if complete_ps.stdout.strip() != verifier.strip():
+                            status = Status.WRONG_ANSWER.value
+                            testcase_infoed = True
+                            info.testcase_aft(
+                                casename,
+                                status,
+                                duration,
+                                result=complete_ps.stdout,
+                                expected=verifier,
+                            )
+                    else:
+                        if not verifier(complete_ps.stdout):
+                            status = Status.WRONG_ANSWER.value
+                    if not testcase_infoed:
                         info.testcase_aft(casename, status, duration)
-                    except subprocess.CalledProcessError:
-                        duration = time.time() - start_time
-                        status = Status.RUNTIME_ERROR.value
-                        info.testcase_aft(
-                            casename,
-                            status,
-                            duration,
-                            stderr=complete_ps.stderr,  # type: ignore
-                        )
-                    status_dict[status].append(casename)
-                utility.unionDict(acc_status_dict, status_dict)
-                acc_testset_names.append(testset.name)
-                info.testset_aft(testset.name, status_dict)
-            info.test_aft(acc_testset_names, acc_status_dict)
+                except subprocess.TimeoutExpired:
+                    duration = timeout
+                    status = Status.TIME_LIMIT_EXCESS.value
+                    info.testcase_aft(casename, status, duration)
+                except subprocess.CalledProcessError:
+                    duration = time.time() - start_time
+                    status = Status.RUNTIME_ERROR.value
+                    info.testcase_aft(
+                        casename,
+                        status,
+                        duration,
+                        stderr=complete_ps.stderr,  # type: ignore
+                    )
+                status_dict[status].append(casename)
+            utility.unionDict(acc_status_dict, status_dict)
+            acc_testset_names.append(testset.name)
+            info.testset_aft(testset.name, status_dict)
+        info.test_aft(acc_testset_names, acc_status_dict)
+
+    def test_main(self, args, testsets, config, exec_p):
+        info = self.theme.testInfo
+        info.test_bef(self.args, testsets)
+        testType = list()
+        if self.args.match:
+            testType.append(self.match_test)
         else:
-            pass
+            testType.append(self.unit_test)
+        for tt in testType:
+            tt(args, testsets, config, exec_p)
+
+    def perform(self):
+        spec = self.import_spec(self.args)
+        config = spec.get_config()
+        testsets = self.get_testsets(self.args, spec)
+        exec_p = self.get_exec_path(self.args)
+
+        self.test_main(self.args, testsets, config, exec_p)
 
 
 class utility:

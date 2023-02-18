@@ -41,12 +41,12 @@ int main() {
 ```
 `lab00` is for usage of helping developemnt and problem `a` requires an
 algorithm to add two numbers. Try out using
-```
-python test.py -R5 a
+``` python
+python test.py -R5 lab00 a add
 ```
 to run the default testset in `lab00/test/a` and 5 random test cases.
 
-For detailed explanation, see `python test.py --help`
+See `python test.py --help` for details.
 
 ## More
 
