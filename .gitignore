@@ -4,5 +4,4 @@
 *.cxx
 *.c
 *.java
-*.conf
 **/__pycache__

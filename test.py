@@ -7,10 +7,24 @@ import argparse
 import subprocess
 from enum import Enum
 
-epilog = """With no options, test will read from the config file (./test.conf
-by default) automatically test your executable according to the testcase in
-`<labID>/test/<problemID>/<testcaseID>` where <labID> and <testcaseID> are two
-two-digit numbers and <problemID> is a lowercase letter.
+epilog = """With no options, test will test your executable <EXEC> according to
+the testcase in `<LABID>/test/<PROBID>/<testcaseID>`.
+
+In the `test` directory of every problem, a file `spec.*` is required to specify
+basic settings and optional problem-specific random testcase generator for the
+problem where `*` means `.py` or `.out`. When both `.py` and `.out` exist,
+`.out` is prefered in consideration of efficiency.
+
+The scopes of `spec.py` is as follows:
+``` python
+### MANDATORY
+_TIMEOUT=1 # Time limit of the problem in unit of sec
+
+### OPTIONAL
+class RandomTestSet(RandomTestSetBase): 
+    def generate(self):
+        pass
+```
 
 To change the default setting, the following options can be used.
 
@@ -87,6 +101,23 @@ class DefaultTestSet(TestSet):
     def __len__(self):
         return self.length
 
+class RandomTestSetBase(TestSet):
+    """Every RandomTestSet should inherit from this class"""
+    def __init__(self, labID, problemID, case_num, testset_name="Random"):
+        super().__init__(testset_name, labID, problemID)
+        self.case_num = case_num
+        self.cnt = 0
+        self.num = case_num
+    
+    def __len__(self):
+        return self.num
+    def __next__(self):
+        if self.cnt == self.num:
+            raise StopIteration
+        self.cnt += 1
+        return self.generate()
+    def generate(self):
+        raise NotImplementedError
 
 class Status(Enum):
     SUCCESS = 0
@@ -191,26 +222,14 @@ class Test:
         self.args = args
         self.theme = theme()
 
-    def begin(self):
+    def perform(self):
         notify = self.theme.notify
         info = self.theme.testInfo
         args = self.args
-        conf_p = Path("test.conf")
-        if not conf_p.is_file():
-            notify.warn("Config file not found.")
-            if notify.yes_or_no("Confirm to init config? (Y/n)"):
-                labID = input("Please input your labID (lab**): ")
-                problemID = input(
-                    "Please input your problemID (lowercase single letter): "
-                )
-                with open(conf_p, "w") as f:
-                    json.dump({"labID": labID, "problemID": problemID}, f)
-            else:
-                return
-        with open(conf_p, "r") as f:
-            conf = json.load(f)
-        labID = conf["labID"]
-        problemID = conf["problemID"]
+
+        labID = args.LABID
+        problemID = args.PROBID
+
         testset_opt = list()
         if not args.random and not args.Random:
             testset_opt = ["default"]
@@ -222,40 +241,41 @@ class Test:
             case_num = args.random
 
         test_basedir = Path(__file__).parent / labID / "test" / problemID
-        test_conf_p = test_basedir / "test.conf"
-        if not test_conf_p.is_file():
-            notify.warn("test.conf not found.")
-            if notify.yes_or_no(
-                f"Create test config for problem {problemID} in {labID}? (Y/n)"
-            ):
-                timeout = input("Time Limit in seconds (float): ")
-                with open(test_conf_p, "w") as f:
-                    json.dump({"timeout": int(timeout)}, f)
-            else:
-                return
-        with open(test_conf_p, "r") as f:
-            test_conf = json.load(f)
-        timeout = test_conf["timeout"]
-
         if not test_basedir.is_dir():
             notify.error(
                 f"{str(test_basedir)} not a directory. It is possible that nobody has written a testcase yet "
             )
             return
+        spec_p = test_basedir / "spec.py"
+        if not spec_p.is_file():
+            notify.warn("spec.py not found.")
+            if notify.yes_or_no(
+                f"Create test config for problem {problemID} in {labID}? (Y/n)"
+            ):
+                timeout = input("Time Limit in seconds (float): ")
+                spec_p.write_text(f"_TIMEOUT = {timeout}")
+            else:
+                return
+        sys.path.insert(1, str(test_basedir))
+        try:
+            import spec # type: ignore
+        except Exception:
+            notify.error(f"spec.* not found under {str(test_basedir)}")
+            return
+        config = spec.CONFIG.get_config()
+        timeout = config["timeout"]
+
         testsets = list()
         if "default" in testset_opt:
             testsets.append(DefaultTestSet(labID, problemID))
         if "random" in testset_opt:
-            import sys
-
-            sys.path.insert(1, str(test_basedir))
-            try:
-                from spec import RandomTestSet  # type: ignore
-            except Exception:
-                notify.error(f"random_test.* not found under {str(test_basedir)}")
-                return
-            testsets.append(RandomTestSet(labID, problemID, case_num))  # type: ignore
+            testsets.append(spec.RandomTestSet(labID, problemID, case_num))  # type: ignore
+        
         exec_p = Path(args.EXEC)
+        if not exec_p.is_file():
+            notify.error(f"{exec_p.absolute()} is not a valid path to an executable")
+            return
+
         info.test_bef(args, testsets)
         if not args.match:
             acc_testset_names = list()
@@ -326,12 +346,12 @@ class utility:
 
 
 def main(args):
-    Test(args).begin()
+    Test(args).perform()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        usage="test [-h] [-rR NUM] [-l] [-m SID] EXEC",
+        usage="test [-h] [-rR NUM] [-l] [-m SID] LABID PROBID EXEC",
         prog="test",
         description="A simple tool for test cpp codes.",
         epilog=epilog,
@@ -345,6 +365,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "-l", "--list-available", action="store_true", help="list available executables"
     )
+    parser.add_argument("LABID", help="usually in the format of lab**")
+    parser.add_argument("PROBID", help="usually a single lowercase letter")
     parser.add_argument("EXEC", help="the executable to be tests")
 
     main(parser.parse_args())
