@@ -27,6 +27,9 @@ Illustration:
 - `test` is the [ctest](https://cmake.org/cmake/help/book/mastering-cmake/chapter/Testing%20With%20CMake%20and%20CTest.html) directory.
 
 ## More
+
 Any attempt to ease coding burden and to accelerate the workflow is welcomed!
+Code style for python codes is "[black](https://github.com/psf/black)" and that
+for cpp is "[llvm](https://llvm.org/docs/CodingStandards.html)"
 
 
