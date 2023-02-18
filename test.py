@@ -126,66 +126,86 @@ class Status(Enum):
 
 class DefaultTheme:
     def __init__(self):
+        # TODO: use logging module to optimize stderr and stdout
         self.testInfo = self._TestInfo()
         self.notify = self._Notify()
 
     class _TestInfo:
         # Animation, decoration and print info when testing EXEC:
-        def test_bef(self, args, testsets, match=False):
+        def __init__(self):
+            self.acc_testset_names: list
+            self.acc_status_dict: defaultdict
+            self.testsets: list
+            self.args: argparse.Namespace
+            self.testset_name: str
+            self.status_dict: defaultdict
+            self.casename: str
+            self.case_input: str
+
+        def __unionDict(self, a, b):
+            # a is a defaultdict(list)
+            for k in b:
+                a[k] += b[k]
+
+        def pre_test(self, args, testsets, match=False):
+            self.testsets = testsets
+            self.acc_testset_names = [ts.name for ts in testsets]
+            self.acc_status_dict = defaultdict(list)
+            self.args = args
             print("Start to test")
 
-        def testset_bef(self, testset_name, match=False):
+        def pre_testset(self, testset_name, match=False):
+            self.testset_name = testset_name
+            self.status_dict = defaultdict(list)
             print(f"Testset [{testset_name}] started")
 
-        def testcase_bef(self, casename, match=False):
-            pass
-
-        def testcase_in(self, casename, match=False):
+        def pre_testcase(self, casename, case_input, match=False):
+            self.casename = casename
+            self.case_input = case_input
             print(f"Testing [{casename}]... ", end="")
 
-        def testcase_aft(
+        def post_testcase(
             self,
-            casename,
             status,
             time,
             stderr=None,
             match=False,
-            result=None,
-            expected=None,
+            **kwargs,
         ):
-            if status == Status.SUCCESS.value:
+            self.status_dict[status.value] += self.casename
+            if status == Status.SUCCESS:
                 print(f"Passed in {time*1000:.2f}ms")
-            elif status == Status.WRONG_ANSWER.value:
-                print(f"current: {result}")
-                print(f"expected: {expected}")
+            elif status == Status.WRONG_ANSWER:
+                print(f"WA\ncurrent: {kwargs['result']}")
+                print(f"expected: {kwargs['expected'].strip()}")
             elif stderr:
                 print("Runtime Error")
                 print(stderr)
             else:
-                print(Status(status).name)
+                print(status)
 
-        def testset_aft(self, testset_name, status_dict, match=False):
+        def post_testset(self, match=False):
             success_num = 0
             tot_num = 0
-            for status in status_dict:
+            for status in self.status_dict:
                 if status == Status.SUCCESS.value:
-                    success_num += len(status_dict[status])
-                tot_num += len(status_dict[status])
-
+                    success_num += len(self.status_dict[status])
+                tot_num += len(self.status_dict[status])
+            self.__unionDict(self.acc_status_dict, self.status_dict)
             print(
-                f"Pass {success_num*100.0/tot_num:.2f}% ({success_num}/{tot_num}) in testset [{testset_name}]"
+                f"Passed {success_num*100.0/tot_num:.2f}% ({success_num}/{tot_num}) in testset [{self.testset_name}]"
             )
 
-        def test_aft(self, testset_names, status_dict, match=False):
+        def post_test(self, match=False):
             success_num = 0
             tot_num = 0
-            for status in status_dict:
-                if status == Status.SUCCESS.value:
-                    success_num += len(status_dict[status])
-                tot_num += len(status_dict[status])
+            for status_v in self.acc_status_dict:
+                if status_v == Status.SUCCESS.value:
+                    success_num += len(self.acc_status_dict[status_v])
+                tot_num += len(self.acc_status_dict[status_v])
             txt = f"Totally passed {success_num*100.0/tot_num:.2f}% ({success_num}/{tot_num}) in "
             first = True
-            for tn in testset_names:
+            for tn in self.acc_testset_names:
                 if first:
                     txt += f"[{tn}]"
                     first = False
@@ -275,22 +295,19 @@ class Test:
         return exec_p
 
     def match_test(self, args, testsets, config, exec_p):
-        pass
+        timeout = config["timeout"]
+        info = self.theme.testInfo
 
     def unit_test(self, args, testsets, config, exec_p):
-        info = self.theme.testInfo
         timeout = config["timeout"]
-        acc_testset_names = list()
-        acc_status_dict = defaultdict(list)
+        info = self.theme.testInfo
         for testset in testsets:
-            info.testset_bef(testset.name)
-            status_dict = defaultdict(list)
+            info.pre_testset(testset.name)
             for casename, unit_case, verifier in testset:
-                info.testcase_bef(casename)
-                info.testcase_in(casename)
-                duration = 0.0
+                info.pre_testcase(casename, unit_case)
+                duration = -1.0
                 start_time = time.time()
-                status = Status.SUCCESS.value
+                status = Status.SUCCESS
                 try:
                     complete_ps = subprocess.run(
                         f"{exec_p.absolute()}",
@@ -303,10 +320,9 @@ class Test:
                     testcase_infoed = False
                     if isinstance(verifier, str):
                         if complete_ps.stdout.strip() != verifier.strip():
-                            status = Status.WRONG_ANSWER.value
+                            status = Status.WRONG_ANSWER
                             testcase_infoed = True
-                            info.testcase_aft(
-                                casename,
+                            info.post_testcase(
                                 status,
                                 duration,
                                 result=complete_ps.stdout,
@@ -314,31 +330,27 @@ class Test:
                             )
                     else:
                         if not verifier(complete_ps.stdout):
-                            status = Status.WRONG_ANSWER.value
+                            status = Status.WRONG_ANSWER
                     if not testcase_infoed:
-                        info.testcase_aft(casename, status, duration)
+                        info.post_testcase(status, duration)
                 except subprocess.TimeoutExpired:
                     duration = timeout
-                    status = Status.TIME_LIMIT_EXCESS.value
-                    info.testcase_aft(casename, status, duration)
+                    status = Status.TIME_LIMIT_EXCESS
+                    info.post_testcase(status, duration)
                 except subprocess.CalledProcessError:
                     duration = time.time() - start_time
-                    status = Status.RUNTIME_ERROR.value
-                    info.testcase_aft(
-                        casename,
+                    status = Status.RUNTIME_ERROR
+                    info.post_testcase(
                         status,
                         duration,
                         stderr=complete_ps.stderr,  # type: ignore
                     )
-                status_dict[status].append(casename)
-            utility.unionDict(acc_status_dict, status_dict)
-            acc_testset_names.append(testset.name)
-            info.testset_aft(testset.name, status_dict)
-        info.test_aft(acc_testset_names, acc_status_dict)
+            info.post_testset()
+        info.post_test()
 
     def test_main(self, args, testsets, config, exec_p):
         info = self.theme.testInfo
-        info.test_bef(self.args, testsets)
+        info.pre_test(self.args, testsets)
         testType = list()
         if self.args.match:
             testType.append(self.match_test)
@@ -354,14 +366,6 @@ class Test:
         exec_p = self.get_exec_path(self.args)
 
         self.test_main(self.args, testsets, config, exec_p)
-
-
-class utility:
-    @staticmethod
-    def unionDict(a, b):
-        # a is a defaultdict(list)
-        for k in b:
-            a[k] += b[k]
 
 
 def main(args):
