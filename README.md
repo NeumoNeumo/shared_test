@@ -24,7 +24,8 @@ Illustration:
 - `12112807` and `23333333` are student IDs.
 - `a`, `b`, `d`, `z` are executables and the letter indecates the index of the
   problem
-- `test` is the [ctest](https://cmake.org/cmake/help/book/mastering-cmake/chapter/Testing%20With%20CMake%20and%20CTest.html) directory.
+- `test` stores testcase files and testcase generators. See more in `python
+  test.py --help`
 
 ## More
 
