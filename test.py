@@ -156,6 +156,32 @@ class DefaultTheme:
 _THEME = DefaultTheme()
 
 
+class StrReader:
+    def __init__(self, txt) -> None:
+        self.txt = txt
+        self.pointer = 0
+        self.end = len(txt)
+        self.IFS = [" ", "\n", "\t", "\r"]
+
+    def read(self):
+        if self.pointer == self.end:
+            raise BufferError("Nothing to read any more")
+        while self.txt[self.pointer] in self.IFS:
+            self.pointer += 1
+            if self.pointer == self.end:
+                raise BufferError("Nothing to read any more")
+        start = self.pointer
+        while self.pointer != self.end and self.txt[self.pointer] not in self.IFS:
+            self.pointer += 1
+        return self.txt[start : self.pointer]
+
+    def read_ch(self):
+        if self.pointer == self.end:
+            raise BufferError("Nothing to read any more")
+        self.pointer += 1
+        return self.txt[self.pointer - 1]
+
+
 class TestSet:
     """This is the class which all customized test sets should inherit"""
 
@@ -189,12 +215,13 @@ class TestSet:
 class DefaultTestSet(TestSet):
     """get test data from given fils in <labID>/test/<problemID>/<testcaseID>"""
 
-    def __init__(self, labID, problemID):
+    def __init__(self, labID, problemID, spec):
         super().__init__("Default", labID, problemID)
         self.data_dir = Path(__file__).parent / labID / "test" / problemID
         self.glob_list = list(self.data_dir.glob("*.in"))
         self.length = len(self.glob_list)
         self.pointer = 0
+        self.spec = spec
 
     def __next__(self):
         if self.pointer == self.length:
@@ -204,8 +231,12 @@ class DefaultTestSet(TestSet):
         tc_ip = self.glob_list[p]
         tc_name = tc_ip.stem
         tc_input = tc_ip.read_text()
-        tc_output = (tc_ip.parent / (tc_name + ".out")).read_text()
-        return (tc_name, tc_input, tc_output)
+        tc_op = tc_ip.parent / (tc_name + ".out")
+        if tc_op.is_file():
+            verifier = tc_op.read_text()
+        else:
+            verifier = self.spec.verifier
+        return (tc_name, tc_input, verifier)
 
     def __len__(self):
         return self.length
@@ -331,7 +362,7 @@ class Test:
             case_num = args.random
         testsets = list()
         if "default" in testset_opt:
-            testsets.append(DefaultTestSet(self.labID, self.problemID))
+            testsets.append(DefaultTestSet(self.labID, self.problemID, spec))
         if "random" in testset_opt:
             testsets.append(spec.RandomTestSet(self.labID, self.problemID, case_num))
         return testsets
@@ -383,7 +414,7 @@ class Test:
                                 expected=verifier,
                             )
                     else:
-                        if not verifier(complete_ps.stdout):
+                        if not verifier(unit_case, complete_ps.stdout):
                             status = Status.WRONG_ANSWER
                     if not testcase_infoed:
                         info.post_testcase(status, duration)
