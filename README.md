@@ -33,8 +33,11 @@ Compile this simple program to get an executable `add` in this directory.
 #include<stdio.h>
 
 int main() {
-  int a, b;
+  int a, b, c;
   scanf("%d %d", &a, &b);
+  if(c >= 100){
+    c += 1;
+  }
   printf("%d", a + b);
   return 0
 }

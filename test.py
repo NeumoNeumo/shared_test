@@ -1,3 +1,4 @@
+from os import name
 import time
 import importlib
 from collections import defaultdict
@@ -38,90 +39,6 @@ To change the default setting, the following options can be used.
 
    *`-l` helps to list all the available executables you can match with.
 """
-
-
-class TestSet:
-    """This is the class which all customized test sets should inherit"""
-
-    def __init__(self, name, labID, problemID):
-        self.name = name
-        self.labID = labID
-        self.problemID = problemID
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        """
-        Returns: (casename, unit_case, verifier)
-            casename (string): name of the testcase
-            unit_case (string): directed to stdin of the tested program
-            verifier (string|Callable[[string], bool]) : either a string used to
-                match the stdout or a function to verify whether the output is
-                reasonable (usually used when the problem has multiple
-                solutions)
-        """
-        raise NotImplementedError()
-
-    def __len__(self):
-        """
-        Returns: num_cases
-        """
-        raise NotImplementedError()
-
-
-class DefaultTestSet(TestSet):
-    """get test data from given fils in <labID>/test/<problemID>/<testcaseID>"""
-
-    def __init__(self, labID, problemID):
-        super().__init__("Default", labID, problemID)
-        self.data_dir = Path(__file__).parent / labID / "test" / problemID
-        self.glob_list = list(self.data_dir.glob("*.in"))
-        self.length = len(self.glob_list)
-        self.pointer = 0
-
-    def __next__(self):
-        if self.pointer == self.length:
-            raise StopIteration
-        p = self.pointer
-        self.pointer += 1
-        tc_ip = self.glob_list[p]
-        tc_name = tc_ip.stem
-        tc_input = tc_ip.read_text()
-        tc_output = (tc_ip.parent / (tc_name + ".out")).read_text()
-        return (tc_name, tc_input, tc_output)
-
-    def __len__(self):
-        return self.length
-
-
-class RandomTestSetBase(TestSet):
-    """Every RandomTestSet should inherit from this class"""
-
-    def __init__(self, labID, problemID, case_num, testset_name="Random"):
-        super().__init__(testset_name, labID, problemID)
-        self.case_num = case_num
-        self.cnt = 0
-        self.num = case_num
-
-    def __len__(self):
-        return self.num
-
-    def __next__(self):
-        if self.cnt == self.num:
-            raise StopIteration
-        self.cnt += 1
-        return self.generate()
-
-    def generate(self):
-        raise NotImplementedError
-
-
-class Status(Enum):
-    SUCCESS = 0
-    WRONG_ANSWER = 1
-    TIME_LIMIT_EXCESS = 2
-    RUNTIME_ERROR = 3
 
 
 class DefaultTheme:
@@ -236,10 +153,143 @@ class DefaultTheme:
                 sys.exit(1)
 
 
+_THEME = DefaultTheme()
+
+
+class TestSet:
+    """This is the class which all customized test sets should inherit"""
+
+    def __init__(self, name, labID, problemID):
+        self.name = name
+        self.labID = labID
+        self.problemID = problemID
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        """
+        Returns: (casename, unit_case, verifier)
+            casename (string): name of the testcase
+            unit_case (string): directed to stdin of the tested program
+            verifier (string|Callable[[string], bool]) : either a string used to
+                match the stdout or a function to verify whether the output is
+                reasonable (usually used when the problem has multiple
+                solutions)
+        """
+        raise NotImplementedError()
+
+    def __len__(self):
+        """
+        Returns: num_cases
+        """
+        raise NotImplementedError()
+
+
+class DefaultTestSet(TestSet):
+    """get test data from given fils in <labID>/test/<problemID>/<testcaseID>"""
+
+    def __init__(self, labID, problemID):
+        super().__init__("Default", labID, problemID)
+        self.data_dir = Path(__file__).parent / labID / "test" / problemID
+        self.glob_list = list(self.data_dir.glob("*.in"))
+        self.length = len(self.glob_list)
+        self.pointer = 0
+
+    def __next__(self):
+        if self.pointer == self.length:
+            raise StopIteration
+        p = self.pointer
+        self.pointer += 1
+        tc_ip = self.glob_list[p]
+        tc_name = tc_ip.stem
+        tc_input = tc_ip.read_text()
+        tc_output = (tc_ip.parent / (tc_name + ".out")).read_text()
+        return (tc_name, tc_input, tc_output)
+
+    def __len__(self):
+        return self.length
+
+
+class RandomTestSetBase(TestSet):
+    """Every RandomTestSet should inherit from this class"""
+
+    def __init__(self, labID, problemID, case_num, testset_name="Random"):
+        super().__init__(testset_name, labID, problemID)
+        self.case_num = case_num
+        self.cnt = 0
+        self.num = case_num
+
+    def __len__(self):
+        return self.num
+
+    def __next__(self):
+        if self.cnt == self.num:
+            raise StopIteration
+        self.cnt += 1
+        return self.generate()
+
+    def generate(self):
+        raise NotImplementedError
+
+
+class PseudoLabelTestset(TestSet):
+    """Testset with pseudo labels generated from a given executable"""
+
+    def __init__(self, src_set: TestSet, labID, probID, sID):
+        super().__init__(src_set.name, src_set.labID, src_set.problemID)
+        self.src_set = src_set
+        self.cnt = 0
+        self.num = len(self.src_set)
+        self.labID = labID
+        self.probID = probID
+        self.src_it = iter(self.src_set)
+        self.sID = sID
+
+    def __len__(self):
+        return self.num
+
+    def __next__(self):
+        if self.cnt == self.num:
+            raise StopIteration
+        casename, unit_case, verifier = next(self.src_it)
+        if not isinstance(verifier, str):
+            _THEME.notify.warn(
+                f"The output of testcase {casename} in testset {self.src_set.name} is not unique."
+            )
+        exec_p = Path(__file__).parent / self.labID / str(self.sID) / self.probID
+        try:
+            complete_ps = subprocess.run(
+                f"{exec_p.absolute()}",
+                text=True,
+                capture_output=True,
+                timeout=7,
+                input=unit_case,
+            )
+        except subprocess.TimeoutExpired:
+            _THEME.notify.error(
+                f"{self.sID} timeout at testcase {casename} in testset {self.src_set.name} "
+            )
+            exit(1)
+        verifier = complete_ps.stdout.strip()
+        self.cnt += 1
+        return (casename, unit_case, verifier)
+
+
+class Status(Enum):
+    SUCCESS = 0
+    WRONG_ANSWER = 1
+    TIME_LIMIT_EXCESS = 2
+    RUNTIME_ERROR = 3
+
+
 class Test:
-    def __init__(self, args, theme=DefaultTheme):
+    def __init__(self, args, theme=None):
         self.args = args
-        self.theme = theme()
+        if theme:
+            self.theme = theme
+        else:
+            self.theme = DefaultTheme()
         self.labID = args.LABID
         self.problemID = args.PROBID
 
@@ -295,8 +345,12 @@ class Test:
         return exec_p
 
     def match_test(self, args, testsets, config, exec_p):
-        timeout = config["timeout"]
-        info = self.theme.testInfo
+        pseudo_testsets = list()
+        for tss in testsets:
+            pseudo_testsets.append(
+                PseudoLabelTestset(tss, args.LABID, args.PROBID, args.match)
+            )
+        self.unit_test(args, pseudo_testsets, config, exec_p)
 
     def unit_test(self, args, testsets, config, exec_p):
         timeout = config["timeout"]
@@ -369,7 +423,9 @@ class Test:
 
 
 def main(args):
-    Test(args).perform()
+    _THEME = DefaultTheme()
+    Test(args, theme=_THEME).perform()
+    # print(args)
 
 
 if __name__ == "__main__":
