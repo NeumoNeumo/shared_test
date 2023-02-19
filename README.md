@@ -44,10 +44,19 @@ int main() {
 ```
 `lab00` is for usage of helping developemnt and problem `a` requires an
 algorithm to add two numbers. Try out using
-``` python
+``` bash
 python test.py -R5 lab00 a add
 ```
 to run the default testset in `lab00/test/a` and 5 random test cases.
+And
+```bash
+python test.py -r10 -m12112807 lab00 a add
+```
+will perform matching test between `add` and the counterpart of Yuan Xu on 10
+random generated testcases.
+
+It is recommended to use a script(bash/bat) file to avoid input the cumbersome
+command repeatedly.
 
 See `python test.py --help` for details.
 
