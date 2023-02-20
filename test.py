@@ -58,6 +58,9 @@ class DefaultTheme:
             self.status_dict: defaultdict
             self.casename: str
             self.case_input: str
+            self.C_RED = "\033[31m"
+            self.C_YEL = "\033[33m"
+            self.C_RST = "\033[m"
 
         def __unionDict(self, a, b):
             # a is a defaultdict(list)
@@ -74,12 +77,12 @@ class DefaultTheme:
         def pre_testset(self, testset_name, match=False):
             self.testset_name = testset_name
             self.status_dict = defaultdict(list)
-            print(f"Testset [{testset_name}] started")
+            print(f"Testset {self.C_YEL}[{testset_name}]{self.C_RST} started")
 
         def pre_testcase(self, casename, case_input, match=False):
             self.casename = casename
             self.case_input = case_input
-            print(f"Testing [{casename}]... ", end="")
+            print(f"Testing {self.C_YEL}{casename}{self.C_RST}... ", end="")
 
         def post_testcase(
             self,
@@ -93,8 +96,8 @@ class DefaultTheme:
             if status == Status.SUCCESS:
                 print(f"Passed in {time*1000:.2f}ms")
             elif status == Status.WRONG_ANSWER:
-                print(f"WA\ncurrent: {kwargs['result']}")
-                print(f"expected: {kwargs['expected'].strip()}")
+                print(f"WA\ncurrent: {self.C_RED}{kwargs['result']}{self.C_RED}")
+                print(f"expected: {self.C_YEL}{kwargs['expected'].strip()}{self.C_RST}")
             elif stderr:
                 print("Runtime Error")
                 print(stderr)
