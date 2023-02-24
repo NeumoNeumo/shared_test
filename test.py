@@ -92,12 +92,14 @@ class DefaultTheme:
             match=False,
             **kwargs,
         ):
-            self.status_dict[status.value] += self.casename
+            self.status_dict[status.value].append(self.casename)
             if status == Status.SUCCESS:
                 print(f"Passed in {time*1000:.2f}ms")
             elif status == Status.WRONG_ANSWER:
-                print(f"WA\ncurrent: {self.C_RED}{kwargs['result']}{self.C_RED}")
-                print(f"expected: {self.C_YEL}{kwargs['expected'].strip()}{self.C_RST}")
+                print(f"WA\ncurrent:\n{self.C_RED}{kwargs['result']}{self.C_RED}")
+                print(
+                    f"expected:\n{self.C_YEL}{kwargs['expected'].strip()}{self.C_RST}"
+                )
             elif stderr:
                 print("Runtime Error")
                 print(stderr)
@@ -112,9 +114,12 @@ class DefaultTheme:
                     success_num += len(self.status_dict[status])
                 tot_num += len(self.status_dict[status])
             self.__unionDict(self.acc_status_dict, self.status_dict)
-            print(
-                f"Passed {success_num*100.0/tot_num:.2f}% ({success_num}/{tot_num}) in testset [{self.testset_name}]"
-            )
+            if tot_num == 0:
+                print(f"Testset [{self.testset_name}]")
+            else:
+                print(
+                    f"Passed {success_num*100.0/tot_num:.2f}% ({success_num}/{tot_num}) in testset [{self.testset_name}]"
+                )
 
         def post_test(self, match=False):
             success_num = 0
@@ -289,7 +294,7 @@ class PseudoLabelTestset(TestSet):
         casename, unit_case, verifier = next(self.src_it)
         if not isinstance(verifier, str):
             _THEME.notify.warn(
-                f"The output of testcase {casename} in testset {self.src_set.name} is not unique."
+                f"The output of testcase {casename} in testset {self.src_set.name} may be not unique."
             )
         exec_p = Path(__file__).parent / self.labID / str(self.sID) / self.probID
         try:
@@ -342,7 +347,9 @@ class Test:
                 f"Create test config for problem {self.problemID} in {self.labID}? (Y/n)"
             ):
                 timeout = input("Time Limit in seconds (float): ")
-                spec_p.write_text('def get_config():\n    return {"timeout": 1}')
+                spec_p.write_text(
+                    'def get_config():\n    return {"timeout": ' + timeout + "}"
+                )
             else:
                 sys.exit(1)
         sys.path.insert(1, str(test_basedir))
